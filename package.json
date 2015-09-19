@@ -1,0 +1,32 @@
+{
+  "name": "gwwcmysql",
+  "version": "0.1.0",
+  "description": "Load files from GWWC MySQL database",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Sam Deere / Colophonemes <dev@colophonemes.com>",
+  "license": "ISC",
+  "dependencies": {
+    "array-unique": "^0.2.1",
+    "bluebird": "^2.9.34",
+    "chalk": "^1.1.1",
+    "cheerio": "^0.19.0",
+    "clone": "^1.0.2",
+    "htmltidy": "0.0.6",
+    "http-request": "^0.7.0",
+    "js-beautify": "^1.5.10",
+    "mkdirp": "^0.5.1",
+    "moment": "^2.10.6",
+    "progress": "^1.1.8",
+    "promise-mysql": "^1.0.0",
+    "request": "^2.61.0",
+    "rimraf": "^2.4.3",
+    "rsyncwrapper": "^0.4.3",
+    "scrapyard": "0.0.13",
+    "slug": "^0.9.1",
+    "to-markdown": "^1.2.1",
+    "yamljs": "^0.2.3"
+  }
+}

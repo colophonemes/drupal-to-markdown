@@ -2,7 +2,7 @@
   "name": "gwwcmysql",
   "version": "0.1.0",
   "description": "Load files from GWWC MySQL database",
-  "main": "index.js",
+  "main": "run.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -17,6 +17,7 @@
     "htmltidy": "0.0.6",
     "http-request": "^0.7.0",
     "js-beautify": "^1.5.10",
+    "merge": "^1.2.0",
     "mkdirp": "^0.5.1",
     "moment": "^2.10.6",
     "progress": "^1.1.8",

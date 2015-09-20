@@ -1,3 +1,40 @@
+// PACKAGES
+
+// Database
+var mysql       = require('promise-mysql');
+var unserialize = require('./unserialize');
+var Promise     = require('bluebird');
+// HTML / text manipulation
+var cheerio     = require('cheerio');
+var tidy = require('htmltidy').tidy;
+var toMarkdown  = require('to-markdown');
+var beautify_html = require('js-beautify').html;
+var moment = require('moment');
+var slug = require('slug');
+    slug.defaults.mode = 'rfc3986';
+// filesystem
+var fs          = require('fs');
+var path        = require('path');
+var rimraf      = require('rimraf');
+var mkdirp      = require('mkdirp');
+var rsync       = require("rsyncwrapper").rsync;
+// HTTP
+var http = require('http-request');
+// utilities
+var yamljs = require('yamljs')
+var clone = require('clone')
+var unique = require('array-unique')
+var ProgressBar = require('progress');
+var merge = require('merge');
+// make the console pretty
+var chalk = require('chalk');
+var alertMsg = chalk.cyan;
+var successMsg = chalk.green;
+var errorMsg = chalk.bold.red;
+var warningMsg = chalk.bold.yellow;
+var statusMsg = chalk.dim.gray;
+
+
 // command-line args
 var args = {};
 process.argv.forEach(function (arg) {
@@ -8,38 +45,57 @@ process.argv.forEach(function (arg) {
         args[arg] = true;
     }
 });
-// packages
-var mysql       = require('promise-mysql');
-var unserialize = require('./unserialize');
-var Promise     = require('bluebird');
+// load arguments from defauts.yml if it exists
+var defaults = yamljs.load('./defaults.yml');
 
-var cheerio     = require('cheerio');
-var tidy = require('htmltidy').tidy;
-var toMarkdown  = require('to-markdown');
-var beautify_html = require('js-beautify').html;
-var moment = require('moment');
-var slug = require('slug');
-    slug.defaults.mode = 'rfc3986';
-var yamljs = require('yamljs')
-var clone = require('clone')
-var unique = require('array-unique')
-
-var fs          = require('fs');
-var path        = require('path');
-var rimraf      = require('rimraf');
-var mkdirp      = require('mkdirp');
-var rsync       = require("rsyncwrapper").rsync;
+// load local arguments from config.yml if it exists
+try {
+    var config = yamljs.load('./config.yml');
+    merge(defaults,config);
+} catch (e){
+    config = false;
+}
 
 
-var http = require('http-request');
+////////////////////////////////////////////////////
+///////////////  CONFIGURATION  ////////////////////
+////////////////////////////////////////////////////
 
-var ProgressBar = require('progress');
-var chalk = require('chalk');
-var alertMsg = chalk.cyan;
-var successMsg = chalk.green;
-var errorMsg = chalk.bold.red;
-var warningMsg = chalk.bold.yellow;
-var statusMsg = chalk.dim.gray;
+// Site information
+var siteURL       = args['--siteurl']       || defaults['siteURL'];      // URL to your existing website. Used to rebuild internal links and to get locally-hosted images. DO NOT include protocol or trailing slash 
+var siteAssetsURL = args['--siteassetsurl'] || defaults['siteAssetsURL']; // if your images are all hosted in a particular folder (managed by drupal). DO NOT include protocol or trailing slash
+var siteProtocol  = args['--siteprotocol']  || defaults['siteProtocol']; // if your site uses HTTPS, use `https`
+
+// Paths to output directories. Paths will be nested within `basepath`
+var basePath       = args['--basepath']    || defaults['basePath'];
+var contentPath    = args['--contentpath'] || defaults['contentPath'];        // path to main content directory, will nest within `basePath`
+var pagePath       = args['--pagepath']    || defaults['pagePath'];          // path to regular pages, will nest within `contentPath`
+var storyPath      = args['--storypath']   || defaults['storyPath'];          // path to blog posts/stories, will nest within `contentPath`
+var authorPath     = args['--authorpath']  || defaults['authorPath'];        // path to blog authors, will nest within `contentPath`
+var imagePath      = args['--imagepath']   || defaults['imagePath']; // path to store downloaded images, will nest within `contentPath`
+var staticSitePath = args['--staticpath']  || defaults['staticSitePath'];             // path to copy the assets to when the script completes (useful if you want to build your static site from another directory)
+
+// limitations
+var nodeLimit   = args['--limit']       || defaults['staticSitePath'];      // how many posts/pages should the script process. Set to zero for no limit/get all posts
+var skipImages  = args['--skipImages']  || defaults['skipImages'];   // skip downloading images altogether. The image processor will always use the cache (unless forceImages is true), but if there are images that consistently return 404/500 errors, the script runs much faster if you don't bother making requests on subsequent runs
+var forceImages = args['--forceImages'] || defaults['forceImages'];   // force the script to ignore cached images and try to re-request everything from the server
+    skipImages  = forceImages ? false : skipImages; // if we're forcing image downloads, then we can't skip them!
+
+// MySQL Connection Settings
+var dbhost      = args['--dbhost']      || defaults['dbhost'];
+var dbport      = args['--dbport']      || defaults['dbport'];
+var dbuser      = args['--dbuser']      || defaults['dbuser'];
+var dbpassword  = args['--dbpassword']  || defaults['dbpassword'];
+var dbname      = args['--dbname']      || defaults['dbname'];
+// MySQL SELECT params
+var connectionNodeTypes = args['--dbname'] || defaults['connectionNodeTypes']; // what kinds of nodes should we be looking for in the database
+
+
+////////////////////////////////////////////////////
+///////////////  END CONFIGURATION /////////////////
+////////////////////////////////////////////////////
+
+
 
 // global vars
 var connection;
@@ -51,18 +107,6 @@ var missingImages = false;
 var missingAuthors = false;
 var missingHTML = false;
 
-var basePath = './files';
-var contentPath = '/content';
-var storyPath = '/posts';
-var pagePath = '/pages';
-var authorPath = '/authors';
-var imagePath = '/images/uploads';
-var staticSitePath = '/Users/sam/Sites/GWWC/givingwhatwecan-static/src';
-
-
-
-var nodeLimit = args['--limit'] || 30;
-var skipImages = args['--skipImages'] || false;
 
 ////////////////////////////////////////////////////
 ///////////////  MAIN CONTROLLER ///////////////////
@@ -70,17 +114,19 @@ var skipImages = args['--skipImages'] || false;
 
 var run = function(){
     var connectionAttempts = 0;
-    console.log(chalk.bold.red.bgWhite(' Scraping the GWWC database! '));
+
+    console.log(chalk.bold.red.bgWhite(' Scraping the database! '));
     console.log(statusMsg('Scrape started at '+moment().format()));
 
+    // try to connect to the database
     promiseWhile(function(){ if(connectionAttempts>10){ throw new Error ( "Cannot connect after 10 attempts" ) }; connectionAttempts++; return !connection},function(){
         console.log(statusMsg('Connecting to MySQL... ',(connectionAttempts>1?'(attempt '+connectionAttempts+')':'') ) );
         return mysql.createConnection({
-          host     : 'localhost',
-          port     : '8889',
-          user     : 'root',
-          password : 'root',
-          database : 'gwwc_drupal'
+          host     : dbhost,
+          port     : dbport,
+          user     : dbuser,
+          password : dbpassword,
+          database : dbname
         }).then(function(conn){
             connection = conn;
         }).catch(function(err){
@@ -88,15 +134,17 @@ var run = function(){
         });
     })
     .then(function(){
-        console.log(statusMsg('connected!'));
+        console.log(statusMsg('connected to ' + chalk.bold(dbname)));
     })
     .then(function(){
         console.log('Attempting to get',nodeLimit>0?nodeLimit:'all','nodes from database...');
+        // count how many nodes are in the database
         return countNodes().then(function(count){
             console.log(statusMsg('There are ',count,'nodes in the database'));
         })
     })
     .then(function(){
+        // get all the nodes from the database and convert them to text
         return getNodes().then(function(){
             console.log(alertMsg('Got ',Object.keys(nodes).length,'nodes...'));
         })
@@ -107,26 +155,26 @@ var run = function(){
         connection.end();
     })
     .then(function(){
+        // do some post-processing
         return postProcess();
     })
     .then(function(){
-        // write posts/pages
+        // write posts/pages to disk
         return writeNodes().then(function(){
             console.log(alertMsg('Posts/pages written...'));
         });
     })
     .then(function(){
-        // write authors
-
+        // write authors to disk
         return writeAuthors().then(function(){
             console.log(alertMsg('Authors written...'));
         });
     })
     .then(function(){
-        // retrieve images
         if(!skipImages){
+            // retrieve images via HTTP
             console.log('Downloading images...');
-            return getImages().then(function(){
+            return getImages(forceImages).then(function(){
                 console.log(alertMsg('Images downloaded!'));            
             });
         } else {
@@ -184,11 +232,10 @@ var run = function(){
 ///////////////  SCRIPT METHODS ////////////////////
 ////////////////////////////////////////////////////
 
-var exit = function(){
+function exit (){
     throw new Error('Exit requested by script')
 }
 
-var connectionNodeTypes = ['story','page','raw','special_page_with_view'];
 connectionNodeTypes.forEach(function(type,index){
     connectionNodeTypes[index] = '`type`="'+type+'"';
 })
@@ -340,7 +387,7 @@ var getNodes = function(){
 
                                         images.push({
                                             file:   file,
-                                            url:    "https://www.givingwhatwecan.org/sites/givingwhatwecan.org/files/" + rows[0].filename
+                                            url:    siteProtocol + '://' + siteAssetsURL + '/' + rows[0].filename
                                         })
                                     })
                                 } else {
@@ -395,11 +442,11 @@ var logMessage = function(title,message){
 }
 
 var localURL = function(url){
-    return url ? url.search('://givingwhatwecan.org/') > -1 || url.search('://www.givingwhatwecan.org/') > -1 || url.search('://') < 0 : false;
+    return url ? url.search('://'+siteURL+'/') > -1 || url.search('://www.'+siteURL+'/') > -1 || url.search('://') < 0 : false;
 }
 var getAbsoluteURL = function(url){
     if (localURL(url) && url.search('://') < 0){
-        url = 'https://givingwhatwecan.org'+(url.substr(0,1)==='/'?'':'/')+url;
+        url = siteProtocol+'://'+siteURL+(url.substr(0,1)==='/'?'':'/')+url;
     }
     return url;
 }
@@ -455,6 +502,7 @@ var saveContentsAsMarkdown = function(input,nodeID){
         var classes = [];
         var a = $(this);
         var href = a.attr('href');
+        var name = a.attr('name');
         // replace absolute internal URLs with relative ones
         href = href;
         // find internal files and move them into an appropriate folder
@@ -480,7 +528,7 @@ var saveContentsAsMarkdown = function(input,nodeID){
         });
         // give the href attribute back
         a.attr('href',href);
-        if (name.length > 0) a.attr('name',href);
+        if (name && name.length > 0) a.attr('name',name);
         // add any classes
         classes = unique(classes);
         a.addClass(classes.join(' '));
@@ -521,9 +569,6 @@ var saveContentsAsMarkdown = function(input,nodeID){
         var title = nodes[nodeID].title|| nodes[nodeID].name;
         missingHTML[title] = {html:input,nid:nodeID,error:err}
     }
-    // if(nodes[nodeID] && nodes[nodeID].title === 'Homepage'){
-    //     console.dir(input); exit();
-    // }
     return input;
 }
 
@@ -532,12 +577,11 @@ var postProcess = function(){
 
         // post-process Nodes
         Object.keys(nodes).forEach(function(nodeID, index){
-            // shorten node contents
-            // nodes[nodeID].contents = nodes[nodeID].contents.substr(0,10)+'...'
             // remove robots meta
             if(nodes[nodeID].meta){
                 delete nodes[nodeID].meta.robots
                 delete nodes[nodeID].meta['og:image:secure_url']
+                // if there's an OpenGraph image, add it to the global list of images to grab
                 if(nodes[nodeID].meta['og:image'] && localURL(nodes[nodeID].meta['og:image'])){
                     var src = nodes[nodeID].meta['og:image'];
                     images.push({file:path.basename(src),url:src});
@@ -545,13 +589,6 @@ var postProcess = function(){
                     delete nodes[nodeID].meta['og:image'];
                 }
             }
-
-            /*if(nodes[nodeID].title.indexOf(':') > -1 ){
-                console.log('Title contains a colon',nodes[nodeID].title);
-                nodes[nodeID].title = nodes[nodeID].title.replace(/:/g,' -- ');
-                console.log('Changed to',nodes[nodeID].title);
-            }*/
-
         })
         resolve();
     })

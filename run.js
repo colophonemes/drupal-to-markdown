@@ -76,7 +76,7 @@ var imagePath      = args['--imagepath']   || defaults['imagePath']; // path to 
 var staticSitePath = args['--staticpath']  || defaults['staticSitePath'];             // path to copy the assets to when the script completes (useful if you want to build your static site from another directory)
 
 // limitations
-var nodeLimit   = args['--limit']       || defaults['staticSitePath'];      // how many posts/pages should the script process. Set to zero for no limit/get all posts
+var nodeLimit   = args['--limit']       || defaults['limit'];      // how many posts/pages should the script process. Set to zero for no limit/get all posts
 var skipImages  = args['--skipImages']  || defaults['skipImages'];   // skip downloading images altogether. The image processor will always use the cache (unless forceImages is true), but if there are images that consistently return 404/500 errors, the script runs much faster if you don't bother making requests on subsequent runs
 var forceImages = args['--forceImages'] || defaults['forceImages'];   // force the script to ignore cached images and try to re-request everything from the server
     skipImages  = forceImages ? false : skipImages; // if we're forcing image downloads, then we can't skip them!
@@ -588,6 +588,11 @@ var postProcess = function(){
                     nodes[nodeID].meta['ogImage'] = path.join(imagePath,path.basename(src));
                     delete nodes[nodeID].meta['og:image'];
                 }
+                // move all the meta keys to the global metadata
+                Object.keys(nodes[nodeID].meta).forEach(function(key){
+                    nodes[nodeID][key] = nodes[nodeID].meta[key];
+                })
+                delete nodes[nodeID].meta
             }
         })
         resolve();
